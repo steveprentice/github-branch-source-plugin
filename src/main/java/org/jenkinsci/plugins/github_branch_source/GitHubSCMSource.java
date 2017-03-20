@@ -70,6 +70,7 @@ import org.kohsuke.stapler.QueryParameter;
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import javax.net.ssl.SSLHandshakeException;
+import javax.servlet.http.HttpServletResponse;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -393,7 +394,7 @@ public class GitHubSCMSource extends AbstractGitSCMSource {
                 if (!fork) {
                     originBranchesWithPR.add(ghPullRequest.getHead().getRef());
                 }
-                boolean trusted = isTrusted(repo, ghPullRequest);
+                boolean trusted = !fork || isTrusted(repo, ghPullRequest, listener);
                 if (!trusted) {
                     listener.getLogger().format("    (not from a trusted source)%n");
                 }
@@ -711,12 +712,27 @@ public class GitHubSCMSource extends AbstractGitSCMSource {
      * TODO since the GitHub API wrapper currently supports neither, we list all collaborator names and check for membership,
      * paying the performance penalty without the benefit of the accuracy.
      * @param ghPullRequest a PR
+     * @param listener
      * @return true if this is a trusted PR
      * @see <a href="https://developer.github.com/v3/pulls/#get-a-single-pull-request">PR metadata</a>
      * @see <a href="http://stackoverflow.com/questions/15096331/github-api-how-to-find-the-branches-of-a-pull-request#comment54931031_15096596">base revision oddity</a>
      */
-    private boolean isTrusted(@Nonnull GHRepository repo, @Nonnull GHPullRequest ghPullRequest) throws IOException {
-        return repo.getCollaboratorNames().contains(ghPullRequest.getUser().getLogin());
+    private boolean isTrusted(@Nonnull GHRepository repo, @Nonnull GHPullRequest ghPullRequest, TaskListener listener) throws IOException {
+        try {
+            return repo.getCollaboratorNames().contains(ghPullRequest.getUser().getLogin());
+        } catch (FileNotFoundException e) {
+            // not permitted
+            listener.getLogger().println("Not permitted to query list of collaborators, assuming not trusted.");
+            return false;
+        } catch (HttpException e) {
+            if (e.getResponseCode() == HttpServletResponse.SC_UNAUTHORIZED
+                    || e.getResponseCode() == HttpServletResponse.SC_NOT_FOUND) {
+                listener.getLogger().println("Not permitted to query list of collaborators, assuming not trusted.");
+                return false;
+            } else {
+                throw e;
+            }
+        }
     }
 
     @Extension public static class DescriptorImpl extends SCMSourceDescriptor {
